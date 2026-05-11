@@ -546,7 +546,7 @@ function checkWord(event, wid) {
   <script src="https://js.puter.com/v2/"></script>
 function playPronounce(event, wid) {
   let w = words.find(x => x.id == wid);
-  puter.ai.txt2speech($,{w,id}).then((duration) => {
+  puter.ai.txt2speech(`${w.id}`).then((duration) => {
     client.replyMessage(event.replyToken, { "type": "audio", "originalContentUrl": `${w.id}`, "duration": duration * 1000 });
   });
 }

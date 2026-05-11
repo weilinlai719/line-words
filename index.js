@@ -546,8 +546,9 @@ function checkWord(event, wid) {
 
 function playPronounce(event, wid) {
   let w = words.find(x => x.id == wid);
-  getAudioDurationInSeconds(`https://words7000.unlink.men/audio/${w.id}.m4a`).then((duration) => {
-    client.replyMessage(event.replyToken, { "type": "audio", "originalContentUrl": `https://words7000.unlink.men/audio/${w.id}.m4a`, "duration": duration * 1000 });
+  <script src="https://js.puter.com/v2/"></script>
+  puter.ai.txt2speech($,{w,id}).then((duration) => {
+    client.replyMessage(event.replyToken, { "type": "audio", "originalContentUrl": `${w.id}`, "duration": duration * 1000 });
   });
 }
 

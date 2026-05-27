@@ -96,7 +96,7 @@ function handleMessageEvent(event) {
   if (fs.existsSync(qPath)) {
     return handleAudioAnswer(event);
   }
-  if (/^[a-zA-Z\s\-\.]+$/.test(event.message.text)) {
+  if (/[a-zA-Z]/.test(event.message.text)) {
     return queryWord(event, event.message.text);
   }
 
@@ -257,7 +257,7 @@ async function queryWord(event, input) {
 
     const replyText = finalLines.join('\n');
 
-    // 4. 你原本的分段邏輯
+    // 4. 分段邏輯
     const MAX_LENGTH = 4900;
     const messages = [];
     for (let i = 0; i < replyText.length; i += MAX_LENGTH) {
@@ -278,9 +278,7 @@ async function queryWord(event, input) {
       const translatedText = resTranslation.text;
 
       const replyText = [
-        `🌐 翻譯結果：`,
-        `----------------------`,
-        `原文：${word}`,
+        `${word}`,
         `----------------------`,
         `中文：${translatedText}`
       ].join('\n');

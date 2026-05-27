@@ -270,8 +270,34 @@ async function queryWord(event, input) {
     await client.replyMessage(event.replyToken, messages.slice(0, 5));
 
   } catch (error) {
-    console.error("Query Error:", error);
-    client.replyMessage(event.replyToken, { type: "text", text: `找不到「${word}」或服務忙碌。` });
+  try {
+      // 判斷是否為空字串
+      if (!word) return;
+
+      const resTranslation = await translate(word, { to: 'zh-TW' });
+      const translatedText = resTranslation.text;
+
+      const replyText = [
+        `🌐 翻譯結果：`,
+        `----------------------`,
+        `原文：${word}`,
+        `----------------------`,
+        `中文：${translatedText}`
+      ].join('\n');
+
+      await client.replyMessage(event.replyToken, {
+        type: "text",
+        text: replyText
+      });
+
+    } catch (transError) {
+      console.error("Translation Error:", transError);
+      client.replyMessage(event.replyToken, { 
+        type: "text", 
+        text: "抱歉，目前無法查詢單字也無法進行翻譯。" 
+      });
+    }
+  
   }
 }
 async function callAI(event, prompt) {

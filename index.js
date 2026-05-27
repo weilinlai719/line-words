@@ -280,7 +280,7 @@ async function queryWord(event, input) {
       const replyText = [
         `${word}`,
         `----------------------`,
-        `中文：${translatedText}`
+        `${translatedText}`
       ].join('\n');
 
       await client.replyMessage(event.replyToken, {

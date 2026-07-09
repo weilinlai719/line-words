@@ -10,6 +10,7 @@ const HTMLParser = require('node-html-parser');
 const https = require('https');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
 const fs = require('fs');
+const cors = require('cors'); // 💡 新增：引入跨網域套件
 
 // --- 新增：Google Sheets 初始化套件 ---
 const { JWT } = require('google-auth-library');
@@ -25,17 +26,28 @@ const config = {
 ====================================*/
 const serviceAccountAuth = new JWT({
   email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
- key: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n').replace(/"/g, '') : '',
+  key: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n').replace(/"/g, '') : '',
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
+// 原本的單字本 Sheet
 const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAuth);
+
+// 💡 新增：讀取你指定的 process.env.Google_post_id 試算表
+const postDoc = new GoogleSpreadsheet(process.env.Google_post_id, serviceAccountAuth);
 
 /*==================================
  CUSTOM REQUIRE AND INIT
 ====================================*/
 const client = new line.Client(config);
 const app = express();
+
+// 💡 新增：全域啟用 CORS，允許你的 GitHub Pages 前端網頁發送請求
+app.use(cors({
+  origin: '*', // 測試成功後，可改成你的 GitHub 網址如 'https://你的帳號.github.io' 提高安全性
+  methods: ['GET', 'POST', 'OPTIONS']
+}));
+
 const words = require('./words.json');
 const words_advance = require('./words-advance.json');
 let echo = { type: 'text', text: '請從選單進行操作 ⬇️\n或是輸入/ai問問AI' };
@@ -54,6 +66,7 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
+// LINE Bot Webhook (保持原樣，不受 express.json() 干擾)
 app.post('/callback', line.middleware(config), (req, res) => {
   Promise.all(req.body.events.map(handleEvent))
     .then((result) => res.json(result))
@@ -63,6 +76,156 @@ app.post('/callback', line.middleware(config), (req, res) => {
     });
 });
 
+/*==================================
+ 🚀 全新擴充：論壇貼文與留言系統 API
+====================================*/
+
+// 1. 【post】新增貼文：自動計算全新編號並寫入 Sheet1
+app.post('/api/post', express.json(), async (req, res) => {
+  try {
+    const { name, content } = req.body; // 接收前端傳來的 署名、內文
+    if (!name || !content) {
+      return res.status(400).json({ success: false, error: '署名與內文不可為空' });
+    }
+
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+
+    // 動態計算新編號：找出目前最大的編號再 +1 (比單純算 rows.length 更安全，避免刪除資料後重複)
+    const maxId = rows.reduce((max, row) => {
+      const id = parseInt(row.get('編號')) || 0;
+      return id > max ? id : max;
+    }, 0);
+    const nextId = maxId + 1;
+
+    // 寫入雲端試算表 (對應欄位名稱)
+    await sheet.addRow({
+      '編號': nextId,
+      '署名': name,
+      '內文': content,
+      '時間': new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })
+    });
+
+    return res.status(200).json({ success: true, id: nextId, message: '文章發布成功！' });
+  } catch (err) {
+    console.error('新增貼文失敗:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. 【comment】新增留言：針對特定文章編號留言，寫入「留言」分頁
+app.post('/api/comment', express.json(), async (req, res) => {
+  try {
+    const { postId, name, content } = req.body; // 文章編號、署名、內文
+    if (!postId || !name || !content) {
+      return res.status(400).json({ success: false, error: '參數缺少，無法留言' });
+    }
+
+    await postDoc.loadInfo();
+    // 尋找名稱為「留言」的工作表分頁
+    const sheet = postDoc.sheetsByTitle['comment'] || postDoc.sheetsByIndex[1];
+    if (!sheet) {
+      return res.status(404).json({ success: false, error: '找不到「留言」分頁，請先在試算表建立該工作表' });
+    }
+
+    await sheet.addRow({
+      '文章編號': postId,
+      '署名': name,
+      '內文': content,
+      '時間': new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })
+    });
+
+    return res.status(200).json({ success: true, message: '留言成功！' });
+  } catch (err) {
+    console.error('新增留言失敗:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. 【get_post_num】取得目前共有幾則貼文
+app.get('/api/posts/count', async (req, res) => {
+  try {
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    return res.status(200).json({ success: true, count: rows.length });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. 【get_post】依據編號，取得單一貼文的詳細資料
+app.get('/api/post/:id', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    // 尋找編號相符的那一列
+    const targetRow = rows.find(r => r.get('編號') == postId);
+    if (!targetRow) {
+      return res.status(404).json({ success: false, error: '找不到該編號的文章' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      post: {
+        id: targetRow.get('編號'),
+        name: targetRow.get('署名'),
+        content: targetRow.get('內文'),
+        time: targetRow.get('時間')
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. 【get_comment】依據文章編號，撈取底下的所有留言
+app.get('/api/post/:id/comments', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByTitle['留言'] || postDoc.sheetsByIndex[1];
+    if (!sheet) {
+      return res.status(200).json({ success: true, comments: [] });
+    }
+
+    const rows = await sheet.getRows();
+    // 過濾出文章編號相符的留言
+    const filteredComments = rows
+      .filter(r => r.get('文章編號') == postId)
+      .map(r => ({
+        name: r.get('署名'),
+        content: r.get('內文'),
+        time: r.get('時間')
+      }));
+
+    return res.status(200).json({ success: true, comments: filteredComments });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. 附加功能：撈取所有文章列表 (供首頁動態 index 顯示用)
+app.get('/api/posts', async (req, res) => {
+  try {
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    const posts = rows.map(r => ({
+      id: r.get('編號'),
+      name: r.get('署名'),
+      content: r.get('內文'),
+      time: r.get('時間')
+    }));
+    return res.status(200).json({ success: true, posts });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 /*==================================
  APP ROUTER
 ====================================*/

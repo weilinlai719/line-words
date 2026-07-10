@@ -45,7 +45,7 @@ const app = express();
 // 💡 新增：全域啟用 CORS，允許你的 GitHub Pages 前端網頁發送請求
 app.use(cors({
   origin: '*', // 測試成功後，可改成你的 GitHub 網址如 'https://你的帳號.github.io' 提高安全性
-  methods: ['GET', 'POST', 'OPTIONS']
+methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
 
 const words = require('./words.json');

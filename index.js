@@ -79,11 +79,10 @@ app.post('/callback', line.middleware(config), (req, res) => {
 /*==================================
  🚀 全新擴充：論壇貼文與留言系統 API
 ====================================*/
-
-// 1. 【post】新增貼文：自動計算全新編號並寫入 Sheet1
+// 1. 【更新：支援圖片寫入】新增貼文
 app.post('/api/post', express.json(), async (req, res) => {
   try {
-    const { name, content } = req.body; // 接收前端傳來的 署名、內文
+    const { name, content, image } = req.body; // 💡 接收前端傳來的圖片網址
     if (!name || !content) {
       return res.status(400).json({ success: false, error: '署名與內文不可為空' });
     }
@@ -92,24 +91,123 @@ app.post('/api/post', express.json(), async (req, res) => {
     const sheet = postDoc.sheetsByIndex[0];
     const rows = await sheet.getRows();
 
-    // 動態計算新編號：找出目前最大的編號再 +1 (比單純算 rows.length 更安全，避免刪除資料後重複)
     const maxId = rows.reduce((max, row) => {
       const id = parseInt(row.get('編號')) || 0;
       return id > max ? id : max;
     }, 0);
     const nextId = maxId + 1;
 
-    // 寫入雲端試算表 (對應欄位名稱)
+    // 寫入雲端試算表 (對應加上 圖片 欄位)
     await sheet.addRow({
       '編號': nextId,
       '署名': name,
       '內文': content,
-      '時間': new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })
+      '時間': new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
+      '圖片': image || '' // 💡 寫入試算表
     });
 
     return res.status(200).json({ success: true, id: nextId, message: '文章發布成功！' });
   } catch (err) {
-    console.error('新增貼文失敗:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. 【更新：支援圖片讀取】依據編號，取得單一貼文
+app.get('/api/post/:id', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    const targetRow = rows.find(r => r.get('編號') == postId);
+    if (!targetRow) {
+      return res.status(404).json({ success: false, error: '找不到該編號的文章' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      post: {
+        id: targetRow.get('編號'),
+        name: targetRow.get('署名'),
+        content: targetRow.get('內文'),
+        time: targetRow.get('時間'),
+        image: targetRow.get('圖片') // 💡 回傳圖片網址
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. 【更新：支援圖片列表】撈取所有文章列表
+app.get('/api/posts', async (req, res) => {
+  try {
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    const posts = rows.map(r => ({
+      id: r.get('編號'),
+      name: r.get('署名'),
+      content: r.get('內文'),
+      time: r.get('時間'),
+      image: r.get('圖片') // 💡 讓列表頁面也能讀取到圖片網址
+    }));
+    return res.status(200).json({ success: true, posts });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// 🚀 全新擴充：修改貼文 API (PUT)
+// ==========================================
+app.put('/api/post/:id', express.json(), async (req, res) => {
+  try {
+    const postId = req.params.id;
+    const { name, content, image } = req.body;
+
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+
+    const targetRow = rows.find(r => r.get('編號') == postId);
+    if (!targetRow) {
+      return res.status(404).json({ success: false, error: '找不到該文章，無法修改' });
+    }
+
+    // 更新 Google Sheets 資料
+    targetRow.set('署名', name);
+    targetRow.set('內文', content);
+    targetRow.set('圖片', image || '');
+    await targetRow.save(); // 儲存變更
+
+    return res.status(200).json({ success: true, message: '文章修改成功！' });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// 🚀 全新擴充：刪除貼文 API (DELETE)
+// ==========================================
+app.delete('/api/post/:id', async (req, res) => {
+  try {
+    const postId = req.params.id;
+
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+
+    const targetRow = rows.find(r => r.get('編號') == postId);
+    if (!targetRow) {
+      return res.status(404).json({ success: false, error: '找不到該文章，無法刪除' });
+    }
+
+    await targetRow.delete(); // 從 Google Sheets 中刪除該列
+
+    return res.status(200).json({ success: true, message: '文章刪除成功！' });
+  } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -155,34 +253,6 @@ app.get('/api/posts/count', async (req, res) => {
   }
 });
 
-// 4. 【get_post】依據編號，取得單一貼文的詳細資料
-app.get('/api/post/:id', async (req, res) => {
-  try {
-    const postId = req.params.id;
-    await postDoc.loadInfo();
-    const sheet = postDoc.sheetsByIndex[0];
-    const rows = await sheet.getRows();
-    
-    // 尋找編號相符的那一列
-    const targetRow = rows.find(r => r.get('編號') == postId);
-    if (!targetRow) {
-      return res.status(404).json({ success: false, error: '找不到該編號的文章' });
-    }
-
-    return res.status(200).json({
-      success: true,
-      post: {
-        id: targetRow.get('編號'),
-        name: targetRow.get('署名'),
-        content: targetRow.get('內文'),
-        time: targetRow.get('時間')
-      }
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 // 5. 【get_comment】依據文章編號，撈取底下的所有留言
 app.get('/api/post/:id/comments', async (req, res) => {
   try {
@@ -204,24 +274,6 @@ app.get('/api/post/:id/comments', async (req, res) => {
       }));
 
     return res.status(200).json({ success: true, comments: filteredComments });
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 6. 附加功能：撈取所有文章列表 (供首頁動態 index 顯示用)
-app.get('/api/posts', async (req, res) => {
-  try {
-    await postDoc.loadInfo();
-    const sheet = postDoc.sheetsByIndex[0];
-    const rows = await sheet.getRows();
-    const posts = rows.map(r => ({
-      id: r.get('編號'),
-      name: r.get('署名'),
-      content: r.get('內文'),
-      time: r.get('時間')
-    }));
-    return res.status(200).json({ success: true, posts });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }

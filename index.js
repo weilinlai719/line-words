@@ -168,7 +168,7 @@ app.get('/api/posts', async (req, res) => {
 app.put('/api/post/:id', express.json(), async (req, res) => {
   try {
     const postId = req.params.id;
-    const { name, content, image } = req.body;
+    const { name, content, image, hashtag } = req.body;
 
     await postDoc.loadInfo();
     const sheet = postDoc.sheetsByIndex[0];

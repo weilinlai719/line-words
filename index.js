@@ -103,7 +103,9 @@ app.post('/api/post', express.json(), async (req, res) => {
       '署名': name,
       '內文': content,
       '時間': new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
-      '圖片': image || '' // 💡 寫入試算表
+      '圖片': image || '' ,
+      'hashtag': hashtag || '' ,
+      // 💡 寫入試算表
     });
 
     return res.status(200).json({ success: true, id: nextId, message: '文章發布成功！' });
@@ -151,7 +153,8 @@ app.get('/api/posts', async (req, res) => {
       name: r.get('署名'),
       content: r.get('內文'),
       time: r.get('時間'),
-      image: r.get('圖片') // 💡 讓列表頁面也能讀取到圖片網址
+      image: r.get('圖片'),
+      hashtag: r.get('hashtag') // 💡 讓列表頁面也能讀取到圖片網址
     }));
     return res.status(200).json({ success: true, posts });
   } catch (err) {

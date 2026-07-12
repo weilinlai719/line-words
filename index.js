@@ -183,6 +183,7 @@ app.put('/api/post/:id', express.json(), async (req, res) => {
     targetRow.set('署名', name);
     targetRow.set('內文', content);
     targetRow.set('圖片', image || '');
+    targetRow.set('hashtag', hashtag || ''); 
     await targetRow.save(); // 儲存變更
 
     return res.status(200).json({ success: true, message: '文章修改成功！' });

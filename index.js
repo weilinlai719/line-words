@@ -82,7 +82,7 @@ app.post('/callback', line.middleware(config), (req, res) => {
 // 1. 【更新：支援圖片寫入】新增貼文
 app.post('/api/post', express.json(), async (req, res) => {
   try {
-    const { name, content, image } = req.body; // 💡 接收前端傳來的圖片網址
+    const { name, content, image ,hashtag} = req.body; // 💡 接收前端傳來的圖片網址
     if (!name || !content) {
       return res.status(400).json({ success: false, error: '署名與內文不可為空' });
     }

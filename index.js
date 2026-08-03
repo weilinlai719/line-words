@@ -288,7 +288,7 @@ app.get('/api/post/:id/comments', async (req, res) => {
 app.post('/api/visit', express.json(), async (req, res) => {
   try {
     // 接收來自前端收集的資料
-    const { screenResolution, language, url } = req.body;
+    const { screenResolution, language } = req.body;
     
     // 獲取後端可得的資訊 (不需使用者授權)
     // 讀取 x-forwarded-for 取得真實 IP，若無則退回 req.ip
@@ -313,7 +313,6 @@ app.post('/api/visit', express.json(), async (req, res) => {
       '來源': referrer,
       '螢幕解析度': screenResolution || '未知',
       '語系': language || '未知',
-      '瀏覽路徑': url || '未知'
     });
 
     // 計算寫入後的總列數 (即總訪客人數)

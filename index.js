@@ -283,34 +283,39 @@ app.get('/api/post/:id/comments', async (req, res) => {
   }
 });
 // ==========================================
-// 🚀 訪客紀錄 API（後端自動處理 IP、地區與電信）
+// 🚀 訪客紀錄 API（後端處理 IP、地區與電信 - 穩定強化版）
 // ==========================================
 app.post('/api/visit', express.json(), async (req, res) => {
   try {
     const { screenResolution, language, url, fingerprint } = req.body;
     
-    // 1. 從 Request Header 取得真實 IP (Render 代理伺服器標頭)
+    // 1. 正確擷取第一個真實 IP (排除代理伺服器 IP)
     const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() 
                || req.socket?.remoteAddress 
                || req.ip 
-               || '未知';
+               || '';
     
-    // 去除 IPv6 的前綴 (例如 ::ffff:1.2.3.4 -> 1.2.3.4)
-    const ip = rawIp.replace(/^.*:/, '') || rawIp;
+    // 去除 IPv6 前綴 (如 ::ffff:114.32.1.1 -> 114.32.1.1)
+    const ip = rawIp.replace(/^.*:/, '').trim();
 
-    // 2. 後端直接呼叫 IP 定位 API 查詢國家/地區與電信商
+    console.log('抓取到的訪客 IP:', ip); // 💡 可在 Render Logs 查看 IP 是否正確
+
     let region = '未知';
     let isp = '未知';
 
-    if (ip && ip !== '127.0.0.1' && ip !== '::1' && ip !== '未知') {
+    // 2. 呼叫 HTTPS IP 定位 API (ipapi.co)
+    if (ip && ip !== '127.0.0.1' && ip !== 'localhost') {
       try {
-        // 使用 ip-api.com (免費且不需要 API key)
-        const ipRes = await fetch(`http://ip-api.com/json/${ip}?lang=zh-TW`);
+        const ipRes = await fetch(`https://ipapi.co/${ip}/json/`);
         if (ipRes.ok) {
           const ipData = await ipRes.json();
-          if (ipData.status === 'success') {
-            region = `${ipData.country || ''} ${ipData.city || ''}`.trim() || '未知';
-            isp = ipData.isp || ipData.org || '未知';
+          if (!ipData.error) {
+            // 組合 國家 + 城市 (例如: Taiwan Taipei)
+            region = `${ipData.country_name || ''} ${ipData.city || ''}`.trim() || '未知';
+            // 電信商 / 網路提供者 (例如: Chunghwa Telecom)
+            isp = ipData.org || ipData.asn || '未知';
+          } else {
+            console.error('IP API 回傳錯誤:', ipData.reason);
           }
         }
       } catch (e) {
@@ -328,10 +333,10 @@ app.post('/api/visit', express.json(), async (req, res) => {
       return res.status(404).json({ success: false, error: '找不到「user」分頁' });
     }
 
-    // 3. 寫入試算表
+    // 3. 寫入 Google Sheets
     await sheet.addRow({
       '時間': time,
-      'IP': ip,
+      'IP': ip || '未知',
       'User-Agent': userAgent,
       '來源': referrer,
       '螢幕解析度': screenResolution || '未知',
@@ -342,7 +347,7 @@ app.post('/api/visit', express.json(), async (req, res) => {
       '電信': isp
     });
 
-    // 4. 計算不重複指紋總數
+    // 4. 計算不重複人數
     const rows = await sheet.getRows();
     const uniqueVisitors = new Set();
 

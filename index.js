@@ -283,29 +283,24 @@ app.get('/api/post/:id/comments', async (req, res) => {
   }
 });
 // ==========================================
-//  新增：訪客紀錄與統計系統 API
+// 🚀 更新：訪客紀錄與統計系統 API (支援指紋過濾)
 // ==========================================
 app.post('/api/visit', express.json(), async (req, res) => {
   try {
-    // 接收來自前端收集的資料
-    const { screenResolution, language } = req.body;
+    const { screenResolution, language, url, fingerprint } = req.body; // 💡 接收指紋
     
-    // 獲取後端可得的資訊 (不需使用者授權)
-    // 讀取 x-forwarded-for 取得真實 IP，若無則退回 req.ip
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || req.ip || '未知';
     const userAgent = req.headers['user-agent'] || '未知';
     const referrer = req.headers['referer'] || '直接訪問';
     const time = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 
     await postDoc.loadInfo();
-    
-    // 抓取名為「user」的分頁
     const sheet = postDoc.sheetsByTitle['user'];
     if (!sheet) {
-      return res.status(404).json({ success: false, error: '找不到「user」分頁，請確認分頁名稱' });
+      return res.status(404).json({ success: false, error: '找不到「user」分頁' });
     }
 
-    // 寫入資料到 user 分頁
+    // 1. 無論是否重複，依然寫入造訪紀錄
     await sheet.addRow({
       '時間': time,
       'IP': ip,
@@ -313,14 +308,27 @@ app.post('/api/visit', express.json(), async (req, res) => {
       '來源': referrer,
       '螢幕解析度': screenResolution || '未知',
       '語系': language || '未知',
+      '瀏覽路徑': url || '未知',
+      '指紋': fingerprint || '未知' // 💡 寫入指紋欄位
     });
 
-    // 計算寫入後的總列數 (即總訪客人數)
+    // 2. 取得所有資料，並計算「不重複」的獨立訪客數
     const rows = await sheet.getRows();
-    const count = rows.length;
+    const uniqueVisitors = new Set(); // 使用 Set 來確保指紋不重複
 
-    // 回傳給前端
-    return res.status(200).json({ success: true, count: count });
+    rows.forEach(r => {
+      const fp = r.get('指紋');
+      const rowIp = r.get('IP');
+      
+      if (fp && fp !== '未知') {
+        uniqueVisitors.add(fp); // 加入指紋
+      } else if (rowIp) {
+        uniqueVisitors.add(rowIp); // 為了相容你之前的舊資料，沒指紋的用 IP 代替
+      }
+    });
+
+    // 回傳不重複的總人數
+    return res.status(200).json({ success: true, count: uniqueVisitors.size });
   } catch (err) {
     console.error('訪客紀錄失敗:', err);
     return res.status(500).json({ success: false, error: err.message });

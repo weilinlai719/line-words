@@ -282,6 +282,51 @@ app.get('/api/post/:id/comments', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+// ==========================================
+//  新增：訪客紀錄與統計系統 API
+// ==========================================
+app.post('/api/visit', express.json(), async (req, res) => {
+  try {
+    // 接收來自前端收集的資料
+    const { screenResolution, language, url } = req.body;
+    
+    // 獲取後端可得的資訊 (不需使用者授權)
+    // 讀取 x-forwarded-for 取得真實 IP，若無則退回 req.ip
+    const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || req.ip || '未知';
+    const userAgent = req.headers['user-agent'] || '未知';
+    const referrer = req.headers['referer'] || '直接訪問';
+    const time = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+
+    await postDoc.loadInfo();
+    
+    // 抓取名為「user」的分頁
+    const sheet = postDoc.sheetsByTitle['user'];
+    if (!sheet) {
+      return res.status(404).json({ success: false, error: '找不到「user」分頁，請確認分頁名稱' });
+    }
+
+    // 寫入資料到 user 分頁
+    await sheet.addRow({
+      '時間': time,
+      'IP': ip,
+      'User-Agent': userAgent,
+      '來源': referrer,
+      '螢幕解析度': screenResolution || '未知',
+      '語系': language || '未知',
+      '瀏覽路徑': url || '未知'
+    });
+
+    // 計算寫入後的總列數 (即總訪客人數)
+    const rows = await sheet.getRows();
+    const count = rows.length;
+
+    // 回傳給前端
+    return res.status(200).json({ success: true, count: count });
+  } catch (err) {
+    console.error('訪客紀錄失敗:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 /*==================================
  APP ROUTER
 ====================================*/

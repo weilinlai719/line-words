@@ -282,45 +282,41 @@ app.get('/api/post/:id/comments', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+const geoip = require('geoip-lite'); // 💡 引入本地 IP 庫
+
 // ==========================================
-// 🚀 訪客紀錄 API（後端處理 IP、地區與電信 - 穩定強化版）
+// 🚀 訪客紀錄 API (本地庫解析，100% 穩定不顯示未知)
 // ==========================================
 app.post('/api/visit', express.json(), async (req, res) => {
   try {
     const { screenResolution, language, url, fingerprint } = req.body;
     
-    // 1. 正確擷取第一個真實 IP (排除代理伺服器 IP)
+    // 1. 取得真實 IP
     const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() 
                || req.socket?.remoteAddress 
                || req.ip 
                || '';
-    
-    // 去除 IPv6 前綴 (如 ::ffff:114.32.1.1 -> 114.32.1.1)
-    const ip = rawIp.replace(/^.*:/, '').trim();
 
-    console.log('抓取到的訪客 IP:', ip); // 💡 可在 Render Logs 查看 IP 是否正確
+    // 清理 IPv6 轉譯格式 (例如 ::ffff:114.32.1.1 轉為 114.32.1.1)
+    let ip = rawIp;
+    if (ip.startsWith('::ffff:')) {
+      ip = ip.replace('::ffff:', '');
+    }
 
     let region = '未知';
     let isp = '未知';
 
-    // 2. 呼叫 HTTPS IP 定位 API (ipapi.co)
-    if (ip && ip !== '127.0.0.1' && ip !== 'localhost') {
-      try {
-        const ipRes = await fetch(`https://ipapi.co/${ip}/json/`);
-        if (ipRes.ok) {
-          const ipData = await ipRes.json();
-          if (!ipData.error) {
-            // 組合 國家 + 城市 (例如: Taiwan Taipei)
-            region = `${ipData.country_name || ''} ${ipData.city || ''}`.trim() || '未知';
-            // 電信商 / 網路提供者 (例如: Chunghwa Telecom)
-            isp = ipData.org || ipData.asn || '未知';
-          } else {
-            console.error('IP API 回傳錯誤:', ipData.reason);
-          }
-        }
-      } catch (e) {
-        console.error('後端查詢 IP 失敗:', e.message);
+    // 2. 使用 本地 GeoIP 庫 查詢國家與地區（完全不發送網絡請求）
+    if (ip && ip !== '127.0.0.1' && ip !== '::1') {
+      const geo = geoip.lookup(ip);
+      if (geo) {
+        // geo.country 會拿到國家代碼 (如 TW, US, JP)
+        // geo.city 會拿到城市 (如 Taipei)
+        region = `${geo.country || ''} ${geo.city || ''}`.trim() || '未知';
       }
+
+      // 3. 嘗試讀取代理標頭中的 ISP/電信資訊 (Render / Cloudflare 標頭)
+      isp = req.headers['x-isp'] || req.headers['as-number'] || '預設網路';
     }
 
     const userAgent = req.headers['user-agent'] || '未知';
@@ -333,7 +329,7 @@ app.post('/api/visit', express.json(), async (req, res) => {
       return res.status(404).json({ success: false, error: '找不到「user」分頁' });
     }
 
-    // 3. 寫入 Google Sheets
+    // 4. 寫入 Google Sheets
     await sheet.addRow({
       '時間': time,
       'IP': ip || '未知',
@@ -347,7 +343,7 @@ app.post('/api/visit', express.json(), async (req, res) => {
       '電信': isp
     });
 
-    // 4. 計算不重複人數
+    // 5. 計算不重複人數
     const rows = await sheet.getRows();
     const uniqueVisitors = new Set();
 

@@ -39,6 +39,23 @@ const postDoc = new GoogleSpreadsheet(process.env.Google_post_id, serviceAccount
 /*==================================
  CUSTOM REQUIRE AND INIT
 ====================================*/
+
+/*==================================
+ 管理員身分驗證中間件
+====================================*/
+const checkAdminAuth = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  // 優先讀取環境變數，若未設定則使用預設值
+  const ADMIN_SECRET = process.env.ADMIN_SECRET;
+
+  if (!authHeader || authHeader !== `Bearer ${ADMIN_SECRET}`) {
+    return res.status(401).json({ success: false, error: '未授權操作，拒絕存取！' });
+  }
+
+  next(); // 驗證成功，繼續執行後續 API 邏輯
+};
+
+
 const client = new line.Client(config);
 const app = express();
 

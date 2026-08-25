@@ -39,6 +39,9 @@ const postDoc = new GoogleSpreadsheet(process.env.Google_post_id, serviceAccount
 /*==================================
  CUSTOM REQUIRE AND INIT
 ====================================*/
+const client = new line.Client(config);
+const app = express();
+
 
 /*==================================
  管理員身分驗證中間件
@@ -68,8 +71,6 @@ const verifyAdmin = (req, res, next) => {
 
 
 
-const client = new line.Client(config);
-const app = express();
 
 // 💡 新增：全域啟用 CORS，允許你的 GitHub Pages 前端網頁發送請求
 app.use(cors({

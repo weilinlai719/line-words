@@ -43,17 +43,29 @@ const postDoc = new GoogleSpreadsheet(process.env.Google_post_id, serviceAccount
 /*==================================
  管理員身分驗證中間件
 ====================================*/
-const checkAdminAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  // 優先讀取環境變數，若未設定則使用預設值
-  const ADMIN_SECRET = process.env.ADMIN_SECRET;
-
-  if (!authHeader || authHeader !== `Bearer ${ADMIN_SECRET}`) {
-    return res.status(401).json({ success: false, error: '未授權操作，拒絕存取！' });
+app.post('/api/login', (express.json()), (req, res) => {
+  const { password } = req.body;
+  // 從後端的環境變數 (process.env.ADMIN_SECRET) 讀取真正的密碼
+  if (password === process.env.ADMIN_SECRET) {
+    // 密碼正確，發給前端一個憑證 (Token) 或者是授權成功訊號
+    res.json({ success: true, token: "your_secure_random_token_here" });
+  } else {
+    res.status(401).json({ success: false, error: "密碼錯誤" });
   }
+});
 
-  next(); // 驗證成功，繼續執行後續 API 邏輯
+const verifyAdmin = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  // 檢查前端傳來的 token 是否符合後端定義的標準
+  if (token === "your_secure_random_token_here") {
+    next(); // 通過，執行下一步
+  } else {
+    res.status(401).json({ success: false, error: '未授權操作，拒絕存取！' });
+  }
 };
+
 
 
 const client = new line.Client(config);
@@ -97,7 +109,7 @@ app.post('/callback', line.middleware(config), (req, res) => {
  🚀 全新擴充：論壇貼文與留言系統 API
 ====================================*/
 // 1. 【更新：支援圖片寫入】新增貼文
-app.post('/api/post', express.json(), async (req, res) => {
+app.post('/api/post', verifyAdmin,express.json(), async (req, res) => {
   try {
     const { name, content, image ,hashtag} = req.body; // 💡 接收前端傳來的圖片網址
     if (!name || !content) {
@@ -182,7 +194,7 @@ app.get('/api/posts', async (req, res) => {
 // ==========================================
 // 🚀 全新擴充：修改貼文 API (PUT)
 // ==========================================
-app.put('/api/post/:id', express.json(), async (req, res) => {
+app.put('/api/post/:id',verifyAdmin, express.json(), async (req, res) => {
   try {
     const postId = req.params.id;
     const { name, content, image, hashtag } = req.body;
@@ -212,7 +224,7 @@ app.put('/api/post/:id', express.json(), async (req, res) => {
 // ==========================================
 // 🚀 全新擴充：刪除貼文 API (DELETE)
 // ==========================================
-app.delete('/api/post/:id', async (req, res) => {
+app.delete('/api/post/:id', verifyAdmin, async (req, res) => {
   try {
     const postId = req.params.id;
 

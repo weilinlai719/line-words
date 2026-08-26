@@ -41,7 +41,7 @@ const postDoc = new GoogleSpreadsheet(process.env.Google_post_id, serviceAccount
 ====================================*/
 const client = new line.Client(config);
 const app = express();
-
+const crypto = require('crypto'); // 用來產生隨機 Token
 
 // 💡 1. 必須將 CORS 設定放在最上方（所有路由之前）
 app.use(cors({
@@ -56,26 +56,63 @@ app.use(express.json());
 /*==================================
  管理員身分驗證中間件
 ====================================*/
-app.post('/api/login', (express.json()), (req, res) => {
-  const { password } = req.body;
-  // 從後端的環境變數 (process.env.ADMIN_SECRET) 讀取真正的密碼
-  if (password === process.env.ADMIN_SECRET) {
-    // 密碼正確，發給前端一個憑證 (Token) 或者是授權成功訊號
-    res.json({ success: true, token: "your_secure_random_token_here" });
-  } else {
-    res.status(401).json({ success: false, error: "密碼錯誤" });
+/*==================================
+ 管理員身分驗證（動態 Token + Google Sheets 儲存）
+====================================*/
+
+// 1. 登入 API：驗證密碼成功後產生時間戳記 Token 並寫入試算表
+app.post('/api/login', express.json(), async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (password === process.env.ADMIN_SECRET) {
+      const now = Date.now(); // 當下時間戳記 (毫秒)
+      const randomString = crypto.randomBytes(12).toString('hex');
+      const newToken = `token_${now}_${randomString}`; // 組合出的安全 Token[cite: 1]
+
+      await postDoc.loadInfo();
+      const sheet = postDoc.sheetsByTitle['token'] || postDoc.sheetsByIndex[2];
+      
+      // 寫入 time 與 token 到試算表[cite: 1]
+      await sheet.addRow({
+        'time': now,
+        'token': newToken
+      });
+
+      return res.json({ success: true, token: newToken });
+    } else {
+      return res.status(401).json({ success: false, error: "密碼錯誤" });
+    }
+  } catch (err) {
+    console.error('登入寫入 Token 失敗:', err);
+    return res.status(500).json({ success: false, error: '伺服器內部錯誤' });
   }
 });
 
-const verifyAdmin = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+// 2. 驗證中間件：從試算表檢查 Token 是否存在
+const verifyAdmin = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
 
-  // 檢查前端傳來的 token 是否符合後端定義的標準
-  if (token === "your_secure_random_token_here") {
-    next(); // 通過，執行下一步
-  } else {
-    res.status(401).json({ success: false, error: '未授權操作，拒絕存取！' });
+    if (!token) {
+      return res.status(401).json({ success: false, error: '未提供 Token，拒絕存取！' });
+    }
+
+    await postDoc.loadInfo();
+    const sheet = postDoc.sheetsByTitle['token'] || postDoc.sheetsByIndex[2];
+    const rows = await sheet.getRows();
+
+    // 搜尋試算表中是否存在該 Token[cite: 1]
+    const matchedRow = rows.find(r => r.get('token') === token);
+
+    if (matchedRow) {
+      next(); // 驗證成功，放行[cite: 1]
+    } else {
+      res.status(401).json({ success: false, error: 'Token 無效或已過期，拒絕存取！' });
+    }
+  } catch (err) {
+    console.error('驗證 Token 失敗:', err);
+    res.status(500).json({ success: false, error: '伺服器驗證錯誤' });
   }
 };
 

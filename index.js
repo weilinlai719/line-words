@@ -116,6 +116,10 @@ const verifyAdmin = async (req, res, next) => {
   }
 };
 
+app.post('/api/verify', verifyAdmin, (req, res) => {
+  res.json({ success: true, message: 'Token 有效' });
+});
+
 const words = require('./words.json');
 const words_advance = require('./words-advance.json');
 let echo = { type: 'text', text: '請從選單進行操作 ⬇️\n或是輸入/ai問問AI' };

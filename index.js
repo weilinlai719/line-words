@@ -179,6 +179,7 @@ app.post('/api/upload-image', verifyAdmin, upload.single('image'), async (req, r
     });
 
     const data = await imgbbRes.json();
+    console.log('ImgBB 回應:', JSON.stringify(data)); // 👈 先加這行debug
 
     if (data.success && data.data && data.data.url) {
       return res.json({ success: true, url: data.data.url });

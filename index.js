@@ -42,7 +42,11 @@ const postDoc = new GoogleSpreadsheet(process.env.Google_post_id, serviceAccount
 const client = new line.Client(config);
 const app = express();
 const crypto = require('crypto'); // 用來產生隨機 Token
+const rateLimit = require('express-rate-limit');
+app.set('trust proxy', 1); 
 
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 // 💡 1. 必須將 CORS 設定放在最上方（所有路由之前）
 app.use(cors({
   origin: '*', 
@@ -59,9 +63,15 @@ app.use(express.json());
 /*==================================
  管理員身分驗證（動態 Token + Google Sheets 儲存）
 ====================================*/
-
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 分鐘
+  max: 5,
+  message: { success: false, error: '嘗試次數過多，請 15 分鐘後再試' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 // 1. 登入 API：驗證密碼成功後產生時間戳記 Token 並寫入試算表
-app.post('/api/login', express.json(), async (req, res) => {
+app.post('/api/login', loginLimiter, express.json(), async (req, res) => {
   try {
     const { password } = req.body;
     if (password === process.env.ADMIN_SECRET) {
@@ -120,6 +130,7 @@ app.post('/api/verify', verifyAdmin, (req, res) => {
   res.json({ success: true, message: 'Token 有效' });
 });
 
+
 const words = require('./words.json');
 const words_advance = require('./words-advance.json');
 let echo = { type: 'text', text: '請從選單進行操作 ⬇️\n或是輸入/ai問問AI' };
@@ -151,6 +162,34 @@ app.post('/callback', line.middleware(config), (req, res) => {
 /*==================================
  🚀 全新擴充：論壇貼文與留言系統 API
 ====================================*/
+app.post('/api/upload-image', verifyAdmin, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: '沒有收到圖片檔案' });
+    }
+
+    const base64Image = req.file.buffer.toString('base64');
+
+    const params = new URLSearchParams();
+    params.append('image', base64Image);
+
+    const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${process.env.IMGBB_API_KEY}`, {
+      method: 'POST',
+      body: params
+    });
+
+    const data = await imgbbRes.json();
+
+    if (data.success && data.data && data.data.url) {
+      return res.json({ success: true, url: data.data.url });
+    } else {
+      return res.status(500).json({ success: false, error: 'ImgBB 上傳失敗' });
+    }
+  } catch (err) {
+    console.error('圖片上傳代理失敗:', err);
+    return res.status(500).json({ success: false, error: '伺服器錯誤' });
+  }
+});
 // 1. 【更新：支援圖片寫入】新增貼文
 app.post('/api/post', verifyAdmin,express.json(), async (req, res) => {
   try {

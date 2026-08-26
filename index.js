@@ -45,6 +45,14 @@ const crypto = require('crypto'); // 用來產生隨機 Token
 const rateLimit = require('express-rate-limit');
 app.set('trust proxy', 1); 
 
+const cloudinary = require('cloudinary').v2;
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
 // 💡 1. 必須將 CORS 設定放在最上方（所有路由之前）
@@ -168,27 +176,16 @@ app.post('/api/upload-image', verifyAdmin, upload.single('image'), async (req, r
       return res.status(400).json({ success: false, error: '沒有收到圖片檔案' });
     }
 
-    const base64Image = req.file.buffer.toString('base64');
+    const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
 
-    const params = new URLSearchParams();
-    params.append('image', base64Image);
-
-    const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${process.env.IMGBB_API_KEY}`, {
-      method: 'POST',
-      body: params
+    const result = await cloudinary.uploader.upload(base64Image, {
+      folder: 'posts' // 可選，會在 Cloudinary 上分資料夾管理
     });
 
-    const data = await imgbbRes.json();
-    console.log('ImgBB 回應:', JSON.stringify(data)); // 👈 先加這行debug
-
-    if (data.success && data.data && data.data.url) {
-      return res.json({ success: true, url: data.data.url });
-    } else {
-      return res.status(500).json({ success: false, error: 'ImgBB 上傳失敗' });
-    }
+    return res.json({ success: true, url: result.secure_url });
   } catch (err) {
     console.error('圖片上傳代理失敗:', err);
-    return res.status(500).json({ success: false, error: '伺服器錯誤' });
+    return res.status(500).json({ success: false, error: '伺服器錯誤', detail: err.message });
   }
 });
 // 1. 【更新：支援圖片寫入】新增貼文

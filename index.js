@@ -371,7 +371,7 @@ app.get('/api/post/:id/comments', async (req, res) => {
   try {
     const postId = req.params.id;
     await postDoc.loadInfo();
-    const sheet = postDoc.sheetsByTitle['留言'] || postDoc.sheetsByIndex[1];
+    const sheet = postDoc.sheetsByTitle['comment'] || postDoc.sheetsByIndex[1];
     if (!sheet) {
       return res.status(200).json({ success: true, comments: [] });
     }

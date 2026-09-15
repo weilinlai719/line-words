@@ -19,7 +19,7 @@
     "google-translate-api-x": "^10.7.2",
     "https": "^1.0.0",
     "multer": "^2.2.0",
-    "node-html-parser": "^5.3.3"
-    "axios": "1.15.1",
+    "node-html-parser": "^5.3.3",
+    "axios": "1.15.1"
   }
 }

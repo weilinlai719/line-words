@@ -63,8 +63,10 @@ app.use(cors({
 }));
 
 // 💡 2. 建議全域解析 JSON
-app.use(express.json());
-
+app.use((req, res, next) => {
+  if (req.path === '/callback') return next();
+  express.json()(req, res, next);
+});
 /*==================================
  管理員身分驗證中間件
 ====================================*/
@@ -917,30 +919,6 @@ function handleAudioAnswer(event) {
     updateUserWrongAnswer(event);
     return client.replyMessage(event.replyToken, moreQuestion("audio", w.id, false));
   }
-}
-
-function createUserCollection(event) {
-  let user = event.source.userId;
-  let path = __dirname + `/user_words/${user}.json`;
-  if (!fs.existsSync(path)) return client.replyMessage(event.replyToken, { type: "text", text: "您的字庫裡尚無任何單字" });
-  let user_json = JSON.parse(fs.readFileSync(path));
-  let user_words = user_json[0].words;
-  if (user_words.length == 0) return client.replyMessage(event.replyToken, { type: "text", text: "您的字庫裡尚無任何單字" });
-  
-  let bubble_content = [];
-  let box_content = [];
-  for (let i = 0; i < user_words.length; i++) {
-    box_content.push({ "type": "box", "layout": "horizontal", "spacing": "md", "contents": [
-      { "type": "text", "wrap": true, "flex": 5, "text": `${user_words[i].word}\n${user_words[i].translate}` },
-      { "type": "button", "flex": 2, "action": { "type": "postback", "label": "查看", "data": `wid=${user_words[i].id}&type=check_word&content=查看` }, "style": "secondary" }
-    ]});
-    if ((i + 1) < user_words.length && (i + 1) % 7 != 0) box_content.push({ "type": "separator" });
-    if ((i + 1) % 7 == 0 || (i + 1) == user_words.length) {
-      bubble_content.push({ "type": "bubble", "body": { "type": "box", "layout": "vertical", "spacing": "md", "contents": box_content } });
-      box_content = [];
-    }
-  }
-  return client.replyMessage(event.replyToken, [{ "type": "flex", "altText": "我的字庫", "contents": { "type": "carousel", "contents": bubble_content } }]);
 }
 
 function checkWord(event, wid) {

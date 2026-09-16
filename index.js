@@ -8,7 +8,6 @@ const express = require('express');
 const path = require('path');
 const HTMLParser = require('node-html-parser');
 const https = require('https');
-const { getAudioDurationInSeconds } = require('get-audio-duration');
 const fs = require('fs');
 const cors = require('cors'); // 💡 新增：引入跨網域套件
 
@@ -20,6 +19,9 @@ const config = {
   channelAccessToken: process.env.token,
   channelSecret: process.env.secret,
 };
+
+// 💡 音檔/靜態資源的對外網址（可用環境變數 BASE_URL 覆蓋）
+const BASE_URL = (process.env.BASE_URL || 'https://words7000.onrender.com').replace(/\/+$/, '');
 
 /*==================================
  GOOGLE SHEETS 授權設定
@@ -62,11 +64,13 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'] 
 }));
 
-// 💡 2. 建議全域解析 JSON
+// 💡 2. 全域解析 JSON，但必須跳過 /callback
+//    LINE 的 middleware 需要「未解析的原始 body」才能驗證簽章
 app.use((req, res, next) => {
   if (req.path === '/callback') return next();
   express.json()(req, res, next);
 });
+
 /*==================================
  管理員身分驗證中間件
 ====================================*/
@@ -518,7 +522,7 @@ function handlePostbackEvent(event) {
   const postback_result = handleUrlParams(event.postback.data);
   switch (postback_result.type) {
     case 'question_type':
-      return client.replyMessage(event.replyToken, [createQuestion(event, postback_result.question_type)]);
+      return client.replyMessage(event.replyToken, [createQuestion(event, postback_result.question_type)].flat());
     case 'answer':
       let isCorrect = handleAnswer(event.postback.data);
       if (isCorrect) {
@@ -531,9 +535,9 @@ function handlePostbackEvent(event) {
     case 'play_pronounce':
       return playPronounce(event, postback_result.wid);
     case 'more_question':
-      return client.replyMessage(event.replyToken, [createQuestion(event, postback_result.question_type, postback_result.wid)]);
+      return client.replyMessage(event.replyToken, [createQuestion(event, postback_result.question_type, postback_result.wid)].flat());
     case 'more_test':
-      return client.replyMessage(event.replyToken, [createQuestion(event, postback_result.question_type)]);
+      return client.replyMessage(event.replyToken, [createQuestion(event, postback_result.question_type)].flat());
     case 'add_to_collection':
       return addToUserCollection(event, postback_result.wid);
     case 'delete_from_my_collection':
@@ -854,19 +858,112 @@ function createQuestion(event, question_type, current_wid = null) {
   return { "type": "flex", "altText": "考試開始，不要作弊！", "contents": { "type": "bubble", "body": { "type": "box", "layout": "vertical", "spacing": "md", "contents": contents } } };
 }
 
+/*==================================
+ 🔊 音檔工具（不依賴 ffprobe）
+====================================*/
+const AUDIO_DIR = __dirname + '/audio';
+const audioDurationCache = {};   // { [id]: 毫秒數 }
+
+// 音檔實體路徑
+function audioFilePath(id) {
+  return `${AUDIO_DIR}/${id}.m4a`;
+}
+
+// 音檔是否存在
+function hasAudioFile(id) {
+  try {
+    return fs.existsSync(audioFilePath(id));
+  } catch (e) {
+    return false;
+  }
+}
+
+// 💡 直接解析 m4a/mp4 檔頭的 mvhd atom 取得長度（毫秒）
+//    原本用的 get-audio-duration 需要系統安裝 ffprobe，Render 沒有 → 會直接失敗
+function getAudioDurationMs(id) {
+  if (audioDurationCache[id]) return audioDurationCache[id];
+
+  const FALLBACK = 3000; // 解析失敗時的預設長度
+  try {
+    const buf = fs.readFileSync(audioFilePath(id));
+    const i = buf.indexOf('mvhd');
+    if (i === -1) return FALLBACK;
+
+    const version = buf.readUInt8(i + 4);
+    let timescale, duration;
+
+    if (version === 1) {
+      // version(1)+flags(3)=4, creation(8), modification(8) → timescale @ i+24, duration(8) @ i+28
+      if (i + 36 > buf.length) return FALLBACK;
+      timescale = buf.readUInt32BE(i + 24);
+      duration = Number(buf.readBigUInt64BE(i + 28));
+    } else {
+      // version(1)+flags(3)=4, creation(4), modification(4) → timescale @ i+16, duration(4) @ i+20
+      if (i + 24 > buf.length) return FALLBACK;
+      timescale = buf.readUInt32BE(i + 16);
+      duration = buf.readUInt32BE(i + 20);
+    }
+
+    if (!timescale || !duration) return FALLBACK;
+
+    let ms = Math.round((duration / timescale) * 1000);
+    if (!isFinite(ms) || ms <= 0) return FALLBACK;
+    if (ms > 60000) ms = 60000;   // LINE 上限保護
+    if (ms < 1000) ms = 1000;     // 太短的話進度條會很怪
+
+    audioDurationCache[id] = ms;
+    return ms;
+  } catch (e) {
+    console.error('讀取音檔長度失敗:', id, e.message);
+    return FALLBACK;
+  }
+}
+
+// 組出 LINE audio 訊息物件
+function buildAudioMessage(id) {
+  return {
+    type: 'audio',
+    originalContentUrl: `${BASE_URL}/audio/${id}.m4a`,
+    duration: getAudioDurationMs(id)
+  };
+}
+
+// 從候選清單中隨機挑一個「有音檔」的單字（最多嘗試 40 次，再退回全域掃描）
+function pickWordWithAudio(list) {
+  if (!Array.isArray(list) || list.length === 0) return null;
+
+  for (let i = 0; i < 40; i++) {
+    const w = list[Math.floor(Math.random() * list.length)];
+    if (w && hasAudioFile(w.id)) return w;
+  }
+
+  const available = list.filter(w => w && hasAudioFile(w.id));
+  if (available.length === 0) return null;
+  return available[Math.floor(Math.random() * available.length)];
+}
+
 function createAudioQuestion(event, question_type, current_wid = null) {
   let new_words = words;
   if (current_wid !== null) {
     let index = getObjectItemIndex(words, current_wid);
     if (index !== -1) new_words = removeByIndex(new_words, index);
   }
-  let w = new_words[Math.floor(Math.random() * new_words.length)];
+
+  // 💡 只從「實際存在音檔」的單字中出題，避免抽到沒有音檔的單字
+  let w = pickWordWithAudio(new_words);
+  if (!w) {
+    return { type: "text", text: "目前發音題庫無法使用，請先選擇其他出題方式。" };
+  }
+
   let user = event.source.userId;
   let path = __dirname + `/user_question/${user}.json`;
   fs.writeFileSync(path, JSON.stringify([w]));
-  return { "type": "flex", "altText": "考試開始，不要作弊！", "contents": { "type": "bubble", 
-    "hero": { "type": "video", "url": `https://words7000.unlink.men/video/${w.id}.mp4`, "previewUrl": "https://words7000.unlink.men/audio/cover.png", "aspectRatio": "16:9" },
-    "body": { "type": "box", "layout": "vertical", "contents": [{ "type": "text", "wrap": true, "text": "請點擊影片聽取音檔\n並輸入答案後送出" }] } } };
+
+  // 💡 改成：直接推一則音檔訊息 + 一則作答提示（不再依賴 /video/*.mp4）
+  return [
+    buildAudioMessage(w.id),
+    { "type": "text", "text": "🔊 請聽取上方音檔，直接輸入你聽到的單字後送出。" }
+  ];
 }
 
 function createAnswers(question_type, wid, total = 3) {
@@ -921,6 +1018,30 @@ function handleAudioAnswer(event) {
   }
 }
 
+function createUserCollection(event) {
+  let user = event.source.userId;
+  let path = __dirname + `/user_words/${user}.json`;
+  if (!fs.existsSync(path)) return client.replyMessage(event.replyToken, { type: "text", text: "您的字庫裡尚無任何單字" });
+  let user_json = JSON.parse(fs.readFileSync(path));
+  let user_words = user_json[0].words;
+  if (user_words.length == 0) return client.replyMessage(event.replyToken, { type: "text", text: "您的字庫裡尚無任何單字" });
+  
+  let bubble_content = [];
+  let box_content = [];
+  for (let i = 0; i < user_words.length; i++) {
+    box_content.push({ "type": "box", "layout": "horizontal", "spacing": "md", "contents": [
+      { "type": "text", "wrap": true, "flex": 5, "text": `${user_words[i].word}\n${user_words[i].translate}` },
+      { "type": "button", "flex": 2, "action": { "type": "postback", "label": "查看", "data": `wid=${user_words[i].id}&type=check_word&content=查看` }, "style": "secondary" }
+    ]});
+    if ((i + 1) < user_words.length && (i + 1) % 7 != 0) box_content.push({ "type": "separator" });
+    if ((i + 1) % 7 == 0 || (i + 1) == user_words.length) {
+      bubble_content.push({ "type": "bubble", "body": { "type": "box", "layout": "vertical", "spacing": "md", "contents": box_content } });
+      box_content = [];
+    }
+  }
+  return client.replyMessage(event.replyToken, [{ "type": "flex", "altText": "我的字庫", "contents": { "type": "carousel", "contents": bubble_content } }]);
+}
+
 function checkWord(event, wid) {
   let w = words.find(x => x.id == wid);
   let word = w.word.replace(/é/g, "e").replace(/[-.]/g, "").replace(/(\w+)\s(\(\w+\.?\))/g, "$1");
@@ -956,9 +1077,11 @@ function checkWord(event, wid) {
 
 function playPronounce(event, wid) {
   let w = words.find(x => x.id == wid);
-  getAudioDurationInSeconds(`https://words7000.unlink.men/audio/${w.id}.m4a`).then((duration) => {
-    client.replyMessage(event.replyToken, { "type": "audio", "originalContentUrl": `https://words7000.unlink.men/audio/${w.id}.m4a`, "duration": duration * 1000 });
-  });
+  if (!w) return client.replyMessage(event.replyToken, { type: "text", text: "找不到這個單字。" });
+  if (!hasAudioFile(w.id)) {
+    return client.replyMessage(event.replyToken, { type: "text", text: `「${w.word}」目前沒有發音音檔。` });
+  }
+  return client.replyMessage(event.replyToken, buildAudioMessage(w.id));
 }
 
 async function addToUserCollection(event, wid) {
